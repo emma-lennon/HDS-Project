@@ -1,0 +1,448 @@
+---
+title: "Code"
+output: html_document
+date: "2024-07-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(mice)
+library(tidyverse)
+library(haven)
+library(miceadds)
+library(nlme)
+library(lme4)
+library(broom.mixed)
+library(mitml)
+library(forestplot)
+library(VIM)
+
+dataset = read_sav("SPHERE data file 25.05.11.sav")
+factor_vars = c("Pracid", "Arm", "Size", "Region", "Gender", "Ed3", "SC2", "xSmoker", "xhadmi", "xangina", "xcabg", "xptca", "xdiabetes", "xSF1")
+dataset[factor_vars] = lapply(dataset[factor_vars], factor)
+```
+
+# Complete Case Models
+
+## Systolic BP
+
+### Unadjusted CC
+
+```{r}
+sysbp_cc_unadj = lme(fixed = ySysBP - xSysBP ~ Arm,
+                     random = ~ 1 | Pracid,
+                     data = dataset,
+                     na.action = na.omit,
+                     method = "ML")
+summary(sysbp_cc_unadj)
+```
+
+### Adjusted CC
+
+```{r}
+sysbp_cc_adj = lme(fixed = ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + xSF1 + Age + Gender + Ed3 + SC2 + xSmoker + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size,
+                   random = ~ 1 | Pracid,
+                   data = dataset,
+                   na.action = na.omit,
+                   method = "ML")
+summary(sysbp_cc_adj)
+```
+
+
+## Diastolic BP
+
+### Unadjusted CC
+
+```{r}
+diasbp_cc_unadj = lme(fixed = yDiasBP - xDiasBP ~ Arm,
+                      random = ~ 1 | Pracid,
+                      data = dataset,
+                      na.action = na.omit,
+                      method = "ML")
+summary(diasbp_cc_unadj)
+```
+
+### Adjusted CC
+
+```{r}
+diasbp_cc_adj = lme(fixed = yDiasBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + xSF1 + Age + Gender + Ed3 + SC2 + xSmoker + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size,
+                    random = ~ 1 | Pracid,
+                    data = dataset,
+                    na.action = na.omit,
+                    method = "ML")
+summary(diasbp_cc_adj)
+```
+
+
+## Cholesterol
+
+### Unadjusted CC
+
+```{r}
+chol_cc_unadj = lme(fixed = yChol - xChol ~ Arm,
+                    random = ~ 1 | Pracid,
+                    data = dataset,
+                    na.action = na.omit,
+                    method = "ML")
+summary(chol_cc_unadj)
+```
+
+### Adjusted CC
+
+```{r}
+chol_cc_adj = lme(fixed = yChol ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + xSF1 + Age + Gender + Ed3 + SC2 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size,
+                    random = ~ 1 | Pracid,
+                    data = dataset,
+                    na.action = na.omit,
+                    method = "ML")
+summary(chol_cc_adj)
+```
+
+
+# Imputation
+
+```{r}
+# imputation data with no auxiliary variables - used in the ignore and fixed effect models
+# imputation_data = dataset[, c("Patid", "Pracid", "Arm", "Size", "Region", "Gender", "Age", "Ed3", "SC2", "xSysBP", "ySysBP", "xDiasBP", "yDiasBP", "xChol", "yChol", "xSmoker", "xHospadm1", "yHospadm1", "xYrsdiag", "xhadmi", "xangina", "xcabg", "xptca", "xdiabetes")]
+factor_vars = c("Pracid", "Arm", "Size", "Region", "Gender", "Ed3", "SC2", "xSmoker", "xhadmi", "xangina", "xcabg", "xptca", "xdiabetes")
+imputation_data[factor_vars] = lapply(imputation_data[factor_vars], factor)
+```
+
+```{r}
+# imputation data with auxiliary variables - used in the random effects model
+auxiliary_data = dataset[, c("Patid", "Pracid", "Arm", "Size", "Region", "Gender", "Age", "Employ", "Ed3", "Marital", "SC2", "xSysBP", "ySysBP", "xDiasBP", "yDiasBP", "xChol", "yChol", "xSF1", "xBMI", "yBMI", "xSmoker", "ySmoker", "xHospadm1", "yHospadm1", "xHospadm2", "xEx", "xYrsdiag", "xhadmi", "xangina", "xcabg", "xptca", "xdiabetes", "xpresystol", "ysystol", "xprediastol", "ydiastol", "xprechol", "ytotal")]
+  
+auxiliary_data = auxiliary_data %>%
+  mutate(Employ = case_when(Employ == 1 | Employ == 2 ~ 1,
+                            Employ == 6 ~ 2,
+                            Employ == 7 ~ 3,
+                            Employ == 3 | Employ == 4 | Employ == 5 | Employ == 8 ~ 4))
+factor_vars = c("Pracid", "Arm", "Size", "Region", "Gender", "Employ", "Ed3", "Marital", "SC2", "xSmoker", "ySmoker", "xSF1", "xEx", "xhadmi", "xangina", "xcabg", "xptca", "xdiabetes")
+auxiliary_data[factor_vars] = lapply(auxiliary_data[factor_vars], factor)
+```
+
+
+## Ignoring clustering
+
+### Imputation
+
+```{r}
+meth = make.method(imputation_data) # sets method for each variable to be imputed
+pred = make.predictorMatrix(imputation_data) # create initial predictor matrix
+pred[c("Pracid", "Arm", "Size", "Region", "Gender", "Age", "xhadmi", "xangina"), ] = 0
+pred[, c("Patid", "Pracid")] = 0
+
+fcs_ignore = mice(imputation_data, pred = pred, meth = meth, seed = 2504, m = 20, maxit = 10, print = FALSE)
+
+# observing the imputations for systolic blood pressure
+bwplot(fcs_ignore)[4]
+densityplot(fcs_ignore)[2]
+```
+
+### Analysis
+
+```{r}
+# systolic BP, unadjusted
+sys_fcs_ignore_unadj = with(fcs_ignore, lmer(ySysBP - xSysBP ~ Arm + (1 | Pracid),
+                                             REML = FALSE))
+summary(pool(sys_fcs_ignore_unadj))
+
+# adjusted
+sys_fcs_ignore_adj = with(fcs_ignore, lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+                                           REML = FALSE))
+summary(pool(sys_fcs_ignore_adj))
+```
+
+```{r}
+# diastolic BP, unadjusted
+dias_fcs_ignore_unadj = with(fcs_ignore, lmer(yDiasBP - xDiasBP ~ Arm + (1 | Pracid),
+                                              REML = FALSE))
+summary(pool(dias_fcs_ignore_unadj))
+
+# adjusted
+dias_fcs_ignore_adj = with(fcs_ignore, lmer(yDiasBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+                                            REML = FALSE))
+summary(pool(dias_fcs_ignore_adj))
+```
+
+```{r}
+# cholesterol, unadjusted
+chol_fcs_ignore_unadj = with(fcs_ignore, lmer(yChol - xChol ~ Arm + (1 | Pracid),
+                                              REML = FALSE))
+summary(pool(chol_fcs_ignore_unadj))
+
+# adjusted
+chol_fcs_ignore_adj = with(fcs_ignore, lmer(yChol ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+                                            REML = FALSE))
+summary(pool(chol_fcs_ignore_adj))
+```
+
+
+## Fixed effect method
+
+### Imputation
+
+```{r}
+meth = make.method(imputation_data) # sets method for each variable to be imputed
+pred = make.predictorMatrix(imputation_data) # create initial predictor matrix
+pred[c("Patid", "Pracid", "Arm", "Size", "Region", "Gender", "Age", "xhadmi", "xangina", "xcabg"), ] = 0
+pred[, c("Patid", "Size", "Region")] = 0 # size and region removed due to these being perfectly predicted by practice ID - error occurs
+
+fcs_fixed = mice(imputation_data, pred = pred, meth = meth, seed = 2504, m = 20, maxit = 10, print = FALSE)
+
+# observing the imputations for systolic blood pressure
+bwplot(fcs_fixed)[4]
+densityplot(fcs_fixed)[2]
+```
+
+### Analysis
+
+```{r}
+# systolic BP, unadjusted
+sys_fcs_fixed_unadj = with(fcs_fixed, lmer(ySysBP - xSysBP ~ Arm + (1 | Pracid),
+                                           REML = FALSE))
+summary(pool(sys_fcs_fixed_unadj))
+
+# adjusted
+sys_fcs_fixed_adj = with(fcs_fixed, lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+                                         REML = FALSE))
+summary(pool(sys_fcs_fixed_adj))
+```
+
+```{r}
+# diastolic BP, unadjusted
+dias_fcs_fixed_unadj = with(fcs_fixed, lmer(yDiasBP - xDiasBP ~ Arm + (1 | Pracid),
+                                            REML = FALSE))
+summary(pool(dias_fcs_fixed_unadj))
+
+# adjusted
+dias_fcs_fixed_adj = with(fcs_fixed, lmer(yDiasBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+                                          REML = FALSE))
+summary(pool(dias_fcs_fixed_adj))
+```
+
+```{r}
+# cholesterol, unadjusted
+chol_fcs_fixed_unadj = with(fcs_fixed, lmer(yChol - xChol ~ Arm + (1 | Pracid),
+                                            REML = FALSE))
+summary(pool(chol_fcs_fixed_unadj))
+
+# adjusted
+chol_fcs_fixed_adj = with(fcs_fixed, lmer(yChol ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+                                          REML = FALSE))
+summary(pool(chol_fcs_fixed_adj))
+```
+
+
+## Random effect method
+
+### Imputation
+
+```{r, message=FALSE, warning=FALSE}
+set.seed(2504)
+auxiliary_data$Pracid = as.integer(auxiliary_data$Pracid)
+pred = 3*make.predictorMatrix(auxiliary_data) # create initial predictor matrix, include cluster means
+pred[, c("Pracid")] = -2
+pred[, c("Patid", "Size", "Region")] = 0
+pred[, c("Arm", "Size", "Region")] = 1
+pred[c("Patid", "Pracid", "Arm", "Size", "Region", "Gender", "Age", "xhadmi", "xangina"), ] = 0
+
+fcs_random = mice(auxiliary_data, pred = pred, meth = "2l.pmm", m = 20, maxit = 10, print = FALSE, seed = 4)
+
+# observing the imputations for systolic blood pressure
+bwplot(fcs_random)[5]
+densityplot(fcs_random)[2]
+```
+
+
+### Analysis
+
+```{r}
+# systolic BP, unadjusted
+sys_fcs_random_unadj = with(fcs_random, lmer(ySysBP - xSysBP ~ Arm + (1 | Pracid),
+                                             REML = FALSE))
+summary(pool(sys_fcs_random_unadj))
+
+# adjusted
+sys_fcs_random_adj = with(fcs_random, lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+                                           REML = FALSE))
+summary(pool(sys_fcs_random_adj))
+```
+
+```{r}
+# diastolic BP, unadjusted
+dias_fcs_random_unadj = with(fcs_random, lmer(yDiasBP - xDiasBP ~ Arm + (1 | Pracid),
+                                              REML = FALSE))
+summary(pool(dias_fcs_random_unadj))
+
+# adjusted
+dias_fcs_random_adj = with(fcs_random, lmer(yDiasBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+                                            REML = FALSE))
+summary(pool(dias_fcs_random_adj))
+```
+
+```{r}
+# cholesterol, unadjusted
+chol_fcs_random_unadj = with(fcs_random, lmer(yChol - xChol ~ Arm + (1 | Pracid),
+                                              REML = FALSE))
+summary(pool(chol_fcs_random_unadj))
+
+# adjusted
+chol_fcs_random_adj = with(fcs_random, lmer(yChol ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+                                            REML = FALSE))
+summary(pool(chol_fcs_random_adj))
+```
+
+
+# Sensitivity Analysis
+
+```{r}
+delta_sys = c(-5, 0, 5, 10, 15)
+
+# systolic BP
+imp_sys = vector("list", length(delta_sys))
+post = fcs_random$post
+
+for (i in 1:length(delta_sys)){
+  del = delta_sys[i]
+  cmd = paste("imp[[j]][,i] <- imp[[j]][,i] +", del)
+  post["ySysBP"] = cmd
+  imp = mice(auxiliary_data, pred = pred, post = post, method = "2l.pmm", m = 20, maxit = 10, seed = 4, print = FALSE)
+  imp_sys[[i]] = imp
+}
+
+bwplot(imp_sys[[1]])[5] # delta = -5
+bwplot(imp_sys[[2]])[5] # delta = 0
+bwplot(imp_sys[[3]])[5] # delta = 5
+bwplot(imp_sys[[4]])[5] # delta = 10
+bwplot(imp_sys[[5]])[5] # delta = 15
+densityplot(imp_sys[[5]])[2] # delta = 15
+```
+
+```{r}
+# delta = -5
+sys_d1 = with(imp_sys[[1]],
+              lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = 0
+sys_d2 = with(imp_sys[[2]],
+              lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = 5
+sys_d3 = with(imp_sys[[3]],
+              lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = 10
+sys_d4 = with(imp_sys[[4]],
+              lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = 15
+sys_d5 = with(imp_sys[[5]],
+              lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+```
+
+```{r}
+# delta = -5
+summary(pool(sys_d1))
+
+# delta = 0
+summary(pool(sys_d2))
+
+# delta = 5
+summary(pool(sys_d3))
+
+# delta = 10
+summary(pool(sys_d4))
+
+# delta = 15
+summary(pool(sys_d5))
+```
+
+
+## Varying delta by arm
+
+```{r}
+ini = mice(auxiliary_data, maxit = 0)
+delta_1 = c(-5, 0, 5)
+delta_2 = c(-5, 0, 5)
+imp.all = vector("list", length(delta_1)*length(delta_2)) %>%
+  array(.,dim = c(length(delta_1),length(delta_2)))
+post = ini$post
+
+for (ind_i in 1:length(delta_1)){
+  d1 = delta_1[ind_i]
+  for (ind_j in 1:length(delta_2)){
+    d2 = delta_2[ind_j]
+    cmd = paste("imp[[j]][data$Arm[!r[, j]] == '1', i] <- imp[[j]][data$Arm[!r[, j]] == '1', i] +", d1 , "\n" ,
+                "imp[[j]][data$Arm[!r[, j]] == '2', i] <- imp[[j]][data$Arm[!r[, j]] == '2', i] +", d2)
+    post["ySysBP"] = cmd
+    imp = mice(auxiliary_data, post = post, pred = pred, meth = "2l.pmm", maxit = 10, m = 20, seed = ind_i + ind_j, print = FALSE)
+    imp.all[[ind_i,ind_j]] <- imp
+  }
+}
+
+# delta1 = -5 and delta2 = -5
+imp.all[[1,1]]
+
+# delta1 = 5 and delta2 = -5
+imp.all[[3, 1]]
+densityplot(imp.all[[3, 1]])[2]
+```
+
+```{r}
+# delta = -5, -5
+sys_d11 = with(imp.all[[1, 1]],
+               lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = -5, 0
+sys_d12 = with(imp.all[[1, 2]],
+               lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = -5, +5
+sys_d13 = with(imp.all[[1, 3]],
+               lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = 0, -5
+sys_d21 = with(imp.all[[2, 1]],
+               lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = 0, 0
+sys_d22 = with(imp.all[[2, 2]],
+               lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = 0, +5
+sys_d23 = with(imp.all[[2, 3]],
+               lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = +5, -5
+sys_d31 = with(imp.all[[3, 1]],
+               lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = +5, 0
+sys_d32 = with(imp.all[[3, 2]],
+               lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+# delta = +5, +5
+sys_d33 = with(imp.all[[3, 3]],
+               lmer(ySysBP ~ Arm + xSysBP + xChol + xDiasBP + xHospadm1 + Age + Gender + Ed3 + SC2 + xSmoker + xSF1 + xYrsdiag + xhadmi + xangina + xcabg + xptca + xdiabetes + Region + Size + (1 | Pracid),
+              REML = F))
+```
+
+```{r}
+summary(pool(sys_d11))
+summary(pool(sys_d12))
+summary(pool(sys_d13))
+
+summary(pool(sys_d21))
+summary(pool(sys_d22))
+summary(pool(sys_d23))
+
+summary(pool(sys_d31))
+summary(pool(sys_d32))
+summary(pool(sys_d33))
+```
+
